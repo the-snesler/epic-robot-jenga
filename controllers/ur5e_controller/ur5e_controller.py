@@ -118,7 +118,7 @@ tt = 0
 try:
     while robot.step(timestep) != -1:
         # Example UR5e pose (replace with your planner)
-        desired_arm = [-0.343, -1.2, 1.5, -2.0, -1.57, 1.03]
+        desired_arm = [0, -1.4, 1.2, -2.0, -1.57, 1.03]
         for j, motor in enumerate(motors):
             motor.setPosition(desired_arm[j])
 
