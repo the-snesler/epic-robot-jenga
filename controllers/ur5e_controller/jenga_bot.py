@@ -22,6 +22,19 @@ class RobotPlacerWithVision:
     BLOCK_LENGTH = 0.15  # 150mm
     BLOCK_HEIGHT = 0.03  # 30mm
     LAYER_HEIGHT = 0.03  # 30mm per layer
+    BLOCK_SPACING = 0.052  # 52mm center-to-center
+
+    # Motion parameters
+    PUSH_DEPTH = 0.035  # 35mm push distance
+    GRIP_WIDTH = 0.045  # 45mm grip width for 50mm blocks
+    APPROACH_OFFSET = 0.08  # 80mm offset for approach
+    RETRACT_OFFSET = 0.08  # 80mm offset for retract
+    SAFE_HEIGHT = 0.15  # 150mm above tower for transit
+    PLACE_HEIGHT_OFFSET = 0.05  # 50mm above layer for placement approach
+
+    # Safety parameters
+    TOWER_CLEARANCE_RADIUS = 0.25  # 25cm clearance around tower center
+    COLLISION_MARGIN = 0.02  # 20mm safety margin
 
     def __init__(self, robot=None):
         """Initialize the robot controller
@@ -30,6 +43,11 @@ class RobotPlacerWithVision:
             robot: Webots Supervisor instance for accessing scene objects
         """
         self.robot = robot
+
+        # Track removed blocks and touched layers
+        self.removed_blocks = set()  # Set of (layer, block_num) tuples
+        self.touched_layers = set()  # Set of layer numbers that have had blocks removed
+        self.blocks_placed_on_top = 0  # Count of blocks placed on top layer
 
     def get_block_position(self, layer, block_num):
         """Get the current position of a block from Webots
@@ -137,6 +155,246 @@ class RobotPlacerWithVision:
     def set_timeout(self, timeout_tt):
         """Set a timeout timestep to block new commands until after that time"""
         self.timeout = timeout_tt
+
+    # ========== STEP 2: PATH PLANNING SYSTEM ==========
+
+    def calculate_waypoints(self, start_pose, end_pose, operation_type="generic"):
+        """Generate collision-free waypoint path
+
+        Args:
+            start_pose: [x, y, z, rx, ry, rz] current pose
+            end_pose: [x, y, z, rx, ry, rz] target pose
+            operation_type: "push", "grip", "place", "generic"
+
+        Returns:
+            List of waypoint poses including start and end
+        """
+        waypoints = []
+        start_pos = np.array(start_pose[:3])
+        end_pos = np.array(end_pose[:3])
+
+        # Calculate tower top for safe height reference
+        tower_top = self.get_tower_top_height()
+        safe_z = tower_top + self.SAFE_HEIGHT
+
+        # Calculate distance from tower center (in XY plane)
+        start_dist = np.linalg.norm(start_pos[:2] - self.TOWER_CENTER[:2])
+        end_dist = np.linalg.norm(end_pos[:2] - self.TOWER_CENTER[:2])
+
+        # If both start and end are close to tower, use 3-phase path
+        if start_dist < self.TOWER_CLEARANCE_RADIUS or end_dist < self.TOWER_CLEARANCE_RADIUS:
+            # Phase 1: Retract - lift to safe height while maintaining XY
+            retract_pose = start_pose.copy()
+            retract_pose[2] = max(safe_z, start_pose[2] + self.RETRACT_OFFSET)
+            waypoints.append(retract_pose)
+
+            # Phase 2: Transit - move to target XY at safe height
+            transit_pose = end_pose.copy()
+            transit_pose[2] = safe_z
+            waypoints.append(transit_pose)
+
+            # Phase 3: Approach - descend to target
+            waypoints.append(end_pose)
+        else:
+            # Simple direct path if far from tower
+            waypoints.append(end_pose)
+
+        return waypoints
+
+    def is_near_tower(self, position):
+        """Check if a position is within the tower clearance zone
+
+        Args:
+            position: [x, y, z] or numpy array
+
+        Returns:
+            bool: True if within tower clearance radius
+        """
+        pos = np.array(position[:3])
+        dist_xy = np.linalg.norm(pos[:2] - self.TOWER_CENTER[:2])
+        return dist_xy < self.TOWER_CLEARANCE_RADIUS
+
+    # ========== STEP 3: BLOCK SELECTION LOGIC ==========
+
+    def select_next_block(self):
+        """Select the next safe block to remove
+
+        Strategy:
+        - Avoid layer 1 (bottom) and layer 9 (top, reserved for placement)
+        - Prefer middle blocks (block 2) from each layer
+        - Move from lower to higher layers
+        - Don't take from same layer consecutively (leave at least 1 block per layer)
+
+        Returns:
+            (layer, block_num) tuple or None if no safe blocks available
+        """
+        # Priority order: layers 2-8, prefer middle blocks
+        for layer in range(2, 9):  # Layers 2 through 8
+            # Skip if this layer already has 2 blocks removed
+            removed_from_layer = sum(1 for (l, b) in self.removed_blocks if l == layer)
+            if removed_from_layer >= 2:
+                continue
+
+            # Try middle block first (block 2), then sides (1, 3)
+            for block_num in [2, 1, 3]:
+                if (layer, block_num) not in self.removed_blocks:
+                    # Found a valid block
+                    return (layer, block_num)
+
+        # No safe blocks found
+        return None
+
+    def mark_block_removed(self, layer, block_num):
+        """Mark a block as removed from the tower
+
+        Args:
+            layer: Layer number
+            block_num: Block number in layer
+        """
+        self.removed_blocks.add((layer, block_num))
+        self.touched_layers.add(layer)
+
+    def is_block_removed(self, layer, block_num):
+        """Check if a block has been removed
+
+        Args:
+            layer: Layer number
+            block_num: Block number in layer
+
+        Returns:
+            bool: True if block was removed
+        """
+        return (layer, block_num) in self.removed_blocks
+
+    # ========== STEP 4.1: POSE CALCULATION FUNCTIONS ==========
+
+    def calculate_push_pose(self, block_pos, layer):
+        """Calculate pose for pushing block
+
+        Args:
+            block_pos: [x, y, z] of block center (numpy array or list)
+            layer: Layer number (for orientation)
+
+        Returns:
+            [x, y, z, rx, ry, rz] pose for pushing
+        """
+        pos = np.array(block_pos)
+        is_odd_layer = (layer % 2) == 1
+
+        if is_odd_layer:
+            # Odd layers: blocks parallel to X-axis
+            # Push from -Y side (robot side)
+            push_pos = pos.copy()
+            push_pos[1] -= (self.BLOCK_WIDTH / 2 + self.APPROACH_OFFSET)
+            # Gripper points in +Y direction (fingers along X)
+            orientation = [0, 0, 0]  # Gripper pointing up, fingers along X
+        else:
+            # Even layers: blocks parallel to Y-axis
+            # Push from -X side
+            push_pos = pos.copy()
+            push_pos[0] -= (self.BLOCK_WIDTH / 2 + self.APPROACH_OFFSET)
+            # Gripper points in +X direction (fingers along Y)
+            orientation = [0, 0, math.pi/2]  # Rotated 90° around Z
+
+        return list(push_pos) + orientation
+
+    def calculate_grip_pose(self, block_pos, layer, extended=True):
+        """Calculate pose for gripping block
+
+        Args:
+            block_pos: [x, y, z] of block center
+            layer: Layer number
+            extended: True if block has been pushed out
+
+        Returns:
+            [x, y, z, rx, ry, rz] pose for gripping
+        """
+        pos = np.array(block_pos)
+        is_odd_layer = (layer % 2) == 1
+
+        if is_odd_layer:
+            # Odd layers: blocks parallel to X-axis
+            # Grip from +Y side (opposite from push)
+            grip_pos = pos.copy()
+            if extended:
+                # Block has been pushed toward +Y, so approach from +Y
+                grip_pos[1] += (self.PUSH_DEPTH + self.BLOCK_WIDTH / 2)
+            else:
+                grip_pos[1] += (self.BLOCK_WIDTH / 2 + self.APPROACH_OFFSET)
+            # Gripper points in -Y direction
+            orientation = [0, 0, math.pi]  # Rotated 180° to point back
+        else:
+            # Even layers: blocks parallel to Y-axis
+            # Grip from +X side (opposite from push)
+            grip_pos = pos.copy()
+            if extended:
+                # Block has been pushed toward +X
+                grip_pos[0] += (self.PUSH_DEPTH + self.BLOCK_WIDTH / 2)
+            else:
+                grip_pos[0] += (self.BLOCK_WIDTH / 2 + self.APPROACH_OFFSET)
+            # Gripper points in -X direction
+            orientation = [0, 0, -math.pi/2]  # Rotated to point back
+
+        return list(grip_pos) + orientation
+
+    def calculate_place_pose(self, tower_height, block_num):
+        """Calculate pose for placing block on top
+
+        Args:
+            tower_height: Current Z-height of tower top
+            block_num: Which block in the new layer (1-3, left to right)
+
+        Returns:
+            [x, y, z, rx, ry, rz] pose for placement
+        """
+        # Determine orientation of new layer based on blocks already placed
+        # Layer 9 is odd (parallel to X), layer 10 would be even, etc.
+        current_top_layer = 9 + (self.blocks_placed_on_top // 3)
+        is_odd_layer = (current_top_layer % 2) == 1
+
+        # Calculate position for this block in the new layer
+        place_pos = self.TOWER_CENTER.copy()
+        place_pos[2] = tower_height + self.BLOCK_HEIGHT / 2
+
+        if is_odd_layer:
+            # Blocks parallel to X-axis: vary in X direction
+            offset = (block_num - 2) * self.BLOCK_SPACING  # -1, 0, +1 spacing
+            place_pos[0] += offset
+            orientation = [0, 0, 0]  # Gripper aligned with X
+        else:
+            # Blocks parallel to Y-axis: vary in Y direction
+            offset = (block_num - 2) * self.BLOCK_SPACING
+            place_pos[1] += offset
+            orientation = [0, 0, math.pi/2]  # Rotated 90°
+
+        return list(place_pos) + orientation
+
+    # ========== STEP 4.2: MOTION CONTROL FUNCTIONS ==========
+
+    def move_to_pose(self, target_pose, current_q):
+        """Calculate joint angles for target pose using IK
+
+        Args:
+            target_pose: [x, y, z, rx, ry, rz]
+            current_q: Current joint angles (6 elements)
+
+        Returns:
+            Target joint angles (6 elements) or None if IK fails
+        """
+        try:
+            target_q = inverseKinematics(target_pose, current_q)
+            return target_q
+        except Exception as e:
+            print(f"IK failed for pose {target_pose}: {e}")
+            return None
+
+    def is_motion_complete(self):
+        """Check if current motion is complete
+
+        Returns:
+            bool: True if not moving
+        """
+        return not self.is_moving
 
     def step_to_target(self, cur_angles):
         if self.target_q is not None:
