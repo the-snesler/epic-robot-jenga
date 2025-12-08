@@ -1,6 +1,6 @@
 """ur5e_controller controller."""
 
-from controller import Robot, Supervisor
+from controller.supervisor import Supervisor
 import numpy as np
 import cv2
 
@@ -118,7 +118,7 @@ def _camera_step_preview():
 # Main loop
 # -----------------------------------------------------------------------------
 tt = 0
-controller = RobotPlacerWithVision()
+controller = RobotPlacerWithVision(robot)  # Pass Supervisor instance
 current_q = [0, -1.4, 1.2, -2.0, -1.57, 1.03]
 
 try:

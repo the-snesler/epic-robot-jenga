@@ -1,0 +1,5 @@
+{
+  "python.autoComplete.extraPaths": [
+    "C:\\Users\\akami\\AppData\\Local\\Programs\\Webots\\lib\\controller\\python\\controller"
+  ]
+}
