@@ -2,6 +2,9 @@
 
 from controller import Robot, Supervisor
 import numpy as np
+import cv2
+
+from jenga_bot import RobotPlacerWithVision
 
 # ===== Optional: fast live preview with OpenCV =====
 try:
@@ -115,24 +118,25 @@ def _camera_step_preview():
 # Main loop
 # -----------------------------------------------------------------------------
 tt = 0
+controller = RobotPlacerWithVision()
+current_q = [0, -1.4, 1.2, -2.0, -1.57, 1.03]
+
 try:
     while robot.step(timestep) != -1:
-        # Example UR5e pose (replace with your planner)
-        desired_arm = [0, -1.4, 1.2, -2.0, -1.57, 1.03]
+        bgr = _camera_step_preview()
+
+        desired_command = controller.getRobotCommand(tt, current_q, bgr)
+
+        current_q = desired_command[:-1]
+
         for j, motor in enumerate(motors):
-            motor.setPosition(desired_arm[j])
+            motor.setPosition(desired_command[j])
 
-        # Demo gripper motion: close over 2s, hold to 4s, then open
-        t = robot.getTime()
-        if t < 2.0:
-            set_gripper_normalized(t / 2.0)   # ramp 0→1
-        elif t < 4.0:
-            set_gripper_normalized(1.0)       # closed
+        if desired_command[-1]:
+            set_gripper_normalized(1)  # closed
+
         else:
-            set_gripper_width_mm(85.0)        # fully open
-
-        _camera_step_preview()
-        tt += 1
+            set_gripper_normalized(0)  # open
 finally:
     if _HAS_CV2:
         try:
