@@ -57,7 +57,7 @@ def T56(q):
         [ 0.0,  0.0,  0.0,  1.0]
     ])
 
-    
+
 def forwardKinematics(q):
     """Computes the forward kinematics for the UR5e robot
 
@@ -91,7 +91,10 @@ def transformError(T_d, T_c):
 
     # rotation error
     R_err = R_c.T @ R_d
-    rotvec_err = R.from_matrix(R_err).as_rotvec()
+    rotvec_err_body = R.from_matrix(R_err).as_rotvec()
+
+    # Rotate the error vector from Body frame back to Base frame
+    rotvec_err = R_c @ rotvec_err_body
 
     error = np.concatenate((dp, rotvec_err))
     return error
@@ -121,8 +124,8 @@ def inverseKinematics(desired_pose, current_q):
     Returns:
         A six-element list of the joint angles in radians
     """
-    q = current_q.copy()
-    max_iters = 100
+    q = np.array(current_q, dtype=float).copy()
+    max_iters = 200
     epsilon = 1e-6
     T_d = np.concatenate(
         (
@@ -145,12 +148,19 @@ def inverseKinematics(desired_pose, current_q):
             print(
                 "Big yikes: IK didn't converge within the maximum number of iterations"
             )
-            q= current_q.copy()
+            q = np.array(current_q, dtype=float).copy()
             break
         max_iters -= 1
         j = jacobian(q)
         j_dagger = np.linalg.inv(j)
         q += j_dagger @ error
+
+        # Clamp shoulder lift joint to prevent hitting table
+        q[1] = np.clip(q[1], -np.pi, 0)
+
+    # Adjust q to be closest to current_q (shortest path)
+    diff = q - current_q
+    q = current_q + (diff + np.pi) % (2 * np.pi) - np.pi
 
     print("IK converged to q:", q)
     return q
@@ -183,4 +193,3 @@ def detect_object(image_bgr, color) -> tuple[float, float] | None:
     angle = math.atan2(delta_y, delta_x)
     distance = math.hypot(delta_x, delta_y)
     return angle, distance
-    

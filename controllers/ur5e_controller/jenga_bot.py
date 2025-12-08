@@ -2,7 +2,7 @@ from utils import *
 import numpy as np
 import math
 
-home_pos = [0, 0, 0, -math.pi/2, 0, 0, False]  # home position with gripper open
+home_pos = [0, -1.4, 1.2, -2.0, -1.57, 1.03]  # home joint angles (not position)
 
 class RobotPlacerWithVision:
     max_joint_vel = 1.2 # radians per second
@@ -17,7 +17,9 @@ class RobotPlacerWithVision:
     timeout = None
 
     # Tower geometry constants
-    TOWER_CENTER = np.array([-0.062, 2.71, 0.715])  # World coordinates
+    TOWER_CENTER = np.array([2.54, 0.062, 0.715])  # World coordinates
+    # to make them work, we had to switch X and Y, then reflect Y
+    ROBOT_BASE = np.array([2.2, 0, 0.7])
     BLOCK_WIDTH = 0.05  # 50mm
     BLOCK_LENGTH = 0.15  # 150mm
     BLOCK_HEIGHT = 0.03  # 30mm
@@ -145,7 +147,15 @@ class RobotPlacerWithVision:
 
     def set_target(self, target_angles, current_angles):
         """Set a new movement target and start interpolation"""
-        self.target_q = target_angles.copy()
+        self.target_q = np.array(target_angles, dtype=float)
+        cur_q = np.array(current_angles, dtype=float)
+
+        # Ensure we take the shortest path to the target angles
+        for i in range(min(6, len(self.target_q))):
+            diff = self.target_q[i] - cur_q[i]
+            shortest_diff = (diff + np.pi) % (2 * np.pi) - np.pi
+            self.target_q[i] = cur_q[i] + shortest_diff
+
         self.is_moving = True
 
     def set_speed(self, speed):
@@ -440,6 +450,17 @@ class RobotPlacerWithVision:
             self.timeout = None
 
         # State machine logic
+        print(current_q)
+
+        # pose = center left of tower, raised up 0.2 on Z with end rotated pi/2 around X
+        target_pose = np.append(
+            self.TOWER_CENTER - self.ROBOT_BASE + [0, self.BLOCK_WIDTH * 1.5 + 0.25, 0],
+            [-1.2092, -1.2092, 1.2092],
+        )
+        target_pose[2] += 0.2
+        target_q = self.move_to_pose(target_pose, cur_angles)
+        if target_q is not None:
+            self.set_target(np.array(list(target_q) + [False]), cur_angles)
 
         # done or error
         gripper_state = (

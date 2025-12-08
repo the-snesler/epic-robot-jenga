@@ -92,40 +92,40 @@ def set_gripper_width_mm(width_mm, max_open_mm=85.0):
 # -----------------------------------------------------------------------------
 # Wrist camera (correct BGRA → BGR for OpenCV preview)
 # -----------------------------------------------------------------------------
-cam = _safe_get_device("wrist_camera")
-if cam:
-    cam.enable(timestep)
-    cam_w, cam_h = cam.getWidth(), cam.getHeight()
-    print(f"[camera] Enabled wrist_camera at {cam_w}x{cam_h}")
-else:
-    cam_w = cam_h = None
-    print("[camera] No device named 'wrist_camera' found.")
+# cam = _safe_get_device("wrist_camera")
+# if cam:
+#     cam.enable(timestep)
+#     cam_w, cam_h = cam.getWidth(), cam.getHeight()
+#     print(f"[camera] Enabled wrist_camera at {cam_w}x{cam_h}")
+# else:
+#     cam_w = cam_h = None
+#     print("[camera] No device named 'wrist_camera' found.")
 
-def _camera_step_preview():
-    if not (cam and _HAS_CV2):
-        return
-    img_bytes = cam.getImage()
-    if img_bytes is None:
-        return
-    # Webots returns BGRA
-    bgra = np.frombuffer(img_bytes, dtype=np.uint8).reshape((cam_h, cam_w, 4))
-    bgr = cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
-    cv2.imshow("Wrist Camera", bgr)
-    if cv2.waitKey(1) & 0xFF == 27:  # ESC closes
-        cv2.destroyAllWindows()
+# def _camera_step_preview():
+#     if not (cam and _HAS_CV2):
+#         return
+#     img_bytes = cam.getImage()
+#     if img_bytes is None:
+#         return
+#     # Webots returns BGRA
+#     bgra = np.frombuffer(img_bytes, dtype=np.uint8).reshape((cam_h, cam_w, 4))
+#     bgr = cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
+#     cv2.imshow("Wrist Camera", bgr)
+#     if cv2.waitKey(1) & 0xFF == 27:  # ESC closes
+#         cv2.destroyAllWindows()
 
 # -----------------------------------------------------------------------------
 # Main loop
 # -----------------------------------------------------------------------------
 tt = 0
 controller = RobotPlacerWithVision(robot)  # Pass Supervisor instance
-current_q = [0, -1.4, 1.2, -2.0, -1.57, 1.03]
+current_q = [-0.075, -1.69, 1.65, -1.53, -1.57, 1.50]
 
 try:
     while robot.step(timestep) != -1:
-        bgr = _camera_step_preview()
+        # bgr = _camera_step_preview()
 
-        desired_command = controller.getRobotCommand(tt, current_q, bgr)
+        desired_command = controller.getRobotCommand(tt, current_q, None)
 
         current_q = desired_command[:-1]
 
@@ -137,6 +137,8 @@ try:
 
         else:
             set_gripper_normalized(0)  # open
+
+        tt += 1
 finally:
     if _HAS_CV2:
         try:
