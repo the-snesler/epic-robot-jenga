@@ -1,6 +1,8 @@
 from utils import *
 import numpy as np
 import math
+from scipy.spatial.transform import Rotation as R
+
 
 home_pos = [0, 0, 0, -math.pi/2, 0, 0, False]  # home position with gripper open
 
@@ -30,6 +32,9 @@ class RobotPlacerWithVision:
             robot: Webots Supervisor instance for accessing scene objects
         """
         self.robot = robot
+        self.phase = "find_next_block"
+        self.layer = 1
+        self.block_num = 2
 
     def get_block_position(self, layer, block_num):
         """Get the current position of a block from Webots
@@ -106,6 +111,29 @@ class RobotPlacerWithVision:
             pass
 
         return None
+        
+    def limit_clamp(self, q):
+        low = np.array([-2.9671, -2.0, -2.9671, -3.1416, -2.9671, -0.0873])
+        high = np.array([ 2.9671, 0.0, 2.9671, -0.4000, 2.9671, 3.8223])
+        return np.clip(q, low, high)
+        
+    def q_to_pose(self, q):
+        T = getFK(q)
+        p = T[:3, 3]
+        Rm = T[:3, :3]
+        w = R.from_matrix(Rm).as_rotvec()
+        return np.concatenate([p, w])
+
+
+    def block_position_to_desired_pose(self, current_q, target_q, rate_alpha=0.12):
+        desired_pose = self.q_to_pose(target_q)
+        q_next_full = getIK(0, desired_pose, current_q)
+        
+        # Interpolate: move only rate_alpha fraction toward the full target joints
+        delta_q = q_next_full - current_q
+        q_interpolated = current_q + rate_alpha * delta_q
+        
+        return limit_clamp(np.array(q_interpolated, dtype=float))
 
     def get_tower_top_height(self):
         """Calculate the Z-coordinate of the top of the tower
@@ -125,6 +153,31 @@ class RobotPlacerWithVision:
 
         return max_height
 
+    def move_to_joint_target(self, current_q_full, target_joint_angles, rate=0.15):
+        """
+        Smooth joint-space interpolation to a hardcoded (or any) joint target.
+        Super stable – never flips configuration.
+        
+        current_q_full:      the 7-element list from Webots [q0..q5, gripper]
+        target_joint_angles: list or array of 6 desired joint values
+        rate:                how fast to move (0.05–0.25 is smooth and safe)
+        """
+        # Extract only the 6 joints
+        q_now = np.array(current_q_full[:6], dtype=float)
+        q_target = np.array(target_joint_angles, dtype=float)
+    
+        # Solve full IK at the target (to make sure it's reachable and pick the best solution)
+        target_pose = self.q_to_pose(q_target)           # convert target joints → pose
+        q_ik = getIK(0, target_pose, q_now)               # seed with current = stays in same config!
+    
+        # Smooth interpolation in joint space
+        delta = q_ik - q_now
+        q_next = q_now + rate * delta
+    
+        # Clamp to physical limits
+        q_next = self.limit_clamp(q_next)
+    
+        return q_next
     def set_target(self, target_angles, current_angles):
         """Set a new movement target and start interpolation"""
         self.target_q = target_angles.copy()
@@ -182,6 +235,90 @@ class RobotPlacerWithVision:
             self.timeout = None
 
         # State machine logic
+        # Uncomment this code if the robo gets stuck under da table again :(
+        # print(tt)
+        # if tt < 50:
+            # return np.array([-0.94, -0.0, 0.5, 0, 0, 0, False])
+        # elif tt < 100:
+            # return np.array([-0.94, -2.00, 0.5, 0, 0, 0, False])
+        if self.phase == "find_next_block":
+            self.layer += 2
+            if self.layer > 10:
+                self.layer -= 7 
+                self.block_num += 1
+                if self.block_num > 3:
+                    self.block_num = 0
+            self.desired_block_pos = self.get_block_position(self.layer, self.block_num)
+            print(self.desired_block_pos)
+            self.phase = "go_to_next_block"
+        if self.phase == "go_to_next_block":
+            block_one_pose = np.array([-0.20, -1.80, 1.90, 1.57, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.001).all():
+                self.phase = "move_towards_block"
+            return np.append(result, 1).tolist()
+        if self.phase == "move_towards_block":
+            print("move_towards_block")
+            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
+            block_one_pose = np.array([-0.20, -1.58, 2.00, 1.70, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.001).all():
+                self.phase = "nudge_block_one"
+            return np.append(result, 1).tolist()
+        if self.phase == "nudge_block_one":
+            print("nudge_block_one")
+            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
+            block_one_pose = np.array([-0.20, -1.46, 1.80, 1.70, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.001).all():
+                self.phase = "nudge_block_two"
+            return np.append(result, 1).tolist()
+        if self.phase == "nudge_block_two":
+            print("nudge_block_two")
+            # ## block_one_pose = np.array([-0.20, -1.39, 1.70, 1.70, -1.37, 0.00])
+            block_one_pose = np.array([-0.20, -1.38, 1.68, 1.70, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.001).all():
+                self.phase = "nudge_block_three"
+            return np.append(result, 1).tolist()
+        if self.phase == "nudge_block_three":
+            print("nudge_block_three")
+            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
+            block_one_pose = np.array([-0.20, -1.46, 1.80, 1.70, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.001).all():
+                self.phase = "nudge_block_four"
+            return np.append(result, 1).tolist()
+        if self.phase == "nudge_block_four":
+            print("nudge_block_four")
+            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
+            block_one_pose = np.array([-0.20, -1.80, 1.90, 1.57, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.001).all():
+                self.phase = "recover_block_one"
+            return np.append(result, 1).tolist()
+        if self.phase == "recover_block_one":
+            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
+            block_one_pose = np.array([0.00, -2.00, 2.90, 1.57, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.001).all():
+                self.phase = "recover_block_one"
+            return np.append(result, 1).tolist()
+            
 
         # done or error
         gripper_state = (

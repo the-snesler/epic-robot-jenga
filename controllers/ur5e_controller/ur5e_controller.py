@@ -126,6 +126,7 @@ try:
         bgr = _camera_step_preview()
 
         desired_command = controller.getRobotCommand(tt, current_q, bgr)
+        tt+= 1
 
         current_q = desired_command[:-1]
 
