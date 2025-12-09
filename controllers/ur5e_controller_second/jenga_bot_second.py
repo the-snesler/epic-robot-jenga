@@ -1,3 +1,5 @@
+#FOR ROBO NUM 2
+
 from utils import *
 import numpy as np
 import math
@@ -32,7 +34,7 @@ class RobotPlacerWithVision:
             robot: Webots Supervisor instance for accessing scene objects
         """
         self.robot = robot
-        self.phase = "find_next_block"
+        self.phase = "align_first_guy"
         self.layer = 1
         self.block_num = 2
 
@@ -233,109 +235,104 @@ class RobotPlacerWithVision:
 
         if self.timeout is not None and tt >= self.timeout:
             self.timeout = None
+            
+            
 
         # State machine logic
         # Uncomment this code if the robo gets stuck under da table again :(
         # print(tt)
         # if tt < 50:
-            # return np.array([-0.94, -0.0, 0.5, 0, 0, 0, False])
+            # return np.array([-2.94, -0.0, 0.5, 0, 0, 0, False])
         # elif tt < 100:
-            # return np.array([-0.94, -2.00, 0.5, 0, 0, 0, False])
-        if self.phase == "find_next_block":
-            self.layer += 2
-            if self.layer > 10:
-                self.layer -= 7 
-                self.block_num += 1
-                if self.block_num > 3:
-                    self.block_num = 0
-            self.desired_block_pos = self.get_block_position(self.layer, self.block_num)
-            print(self.desired_block_pos)
-            self.phase = "go_to_next_block"
+            # return np.array([-2.94, -2.00, 0.5, 0, 0, 0, False])
+        if self.phase == "align_first_guy":
+            print("align_first_guy")
+            block_one_pose = np.array([-0.20, -2.00, 1.90, 3.37, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.0001).all():
+                self.phase = "go_to_next_block"
+            return np.append(result, 1).tolist()
             
         if self.phase == "go_to_next_block":
-            block_one_pose = np.array([-0.20, -1.80, 1.90, 1.57, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
-                self.phase = "move_towards_block"
-            return np.append(result, 1).tolist()
-            
-        if self.phase == "move_towards_block":
-            print("move_towards_block")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
-            block_one_pose = np.array([-0.20, -1.58, 2.00, 1.70, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
-                self.phase = "nudge_block_one"
-            return np.append(result, 1).tolist()
-        if self.phase == "nudge_block_one":
-            print("nudge_block_one")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
-            block_one_pose = np.array([-0.20, -1.46, 1.80, 1.90, -1.37, 0.00])
+            print("go_to_next_block")
+            block_one_pose = np.array([-0.25, -1.95, 2.10, 3.37, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
             
             q_diff = abs(current_q - result)
             if (q_diff < 0.0001).all():
-                self.phase = "nudge_block_two"
-            return np.append(result, 1).tolist()
+                self.phase = "go_to_next_block_two"
+            return np.append(result, 0).tolist()
             
-        if self.phase == "nudge_block_two":
-            print("nudge_block_two")
-            # ## block_one_pose = np.array([-0.20, -1.39, 1.70, 1.70, -1.37, 0.00])
-            block_one_pose = np.array([-0.20, -1.355, 1.66, 1.70, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
-                self.phase = "nudge_block_five"
-            return np.append(result, 1).tolist()
-            
-        if self.phase == "nudge_block_three":
-            print("nudge_block_three")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
-            block_one_pose = np.array([-0.20, -1.37, 1.70, 1.70, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
-                self.phase = "nudge_block_four"
-            return np.append(result, 1).tolist()
-            
-        if self.phase == "nudge_block_four":
-            print("nudge_block_four")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
-            block_one_pose = np.array([-0.20, -1.80, 1.90, 1.57, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
-                self.phase = "recover_block_one"
-            return np.append(result, 1).tolist()
-            
-        if self.phase == "recover_block_one":
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
-            block_one_pose = np.array([0.00, -2.00, 2.90, 1.57, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
-                self.phase = "recover_block_one"
-            return np.append(result, 1).tolist()
-            
-        if self.phase == "nudge_block_five":
-            print("nudge_block_five")
-            # ## block_one_pose = np.array([-0.20, -1.39, 1.70, 1.70, -1.37, 0.00])
-            block_one_pose = np.array([-0.20, -1.30, 1.62, 1.70, -1.37, 0.00])
+        if self.phase == "go_to_next_block_two":
+            print("go_to_next_block_two")
+            block_one_pose = np.array([-0.25, -1.60, 1.90, 1.00, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
             
             q_diff = abs(current_q - result)
             if (q_diff < 0.0001).all():
-                self.phase = "nudge_block_three"
+                self.phase = "go_to_next_block_three"
+            return np.append(result, 0).tolist()
+            
+        if self.phase == "go_to_next_block_three":
+            print("go_to_next_block_three")
+            block_one_pose = np.array([-0.25, -1.45, 1.80, 1.00, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.0001).all():
+                self.phase = "go_to_next_block_four"
             return np.append(result, 1).tolist()
             
+        if self.phase == "go_to_next_block_four":
+            print("go_to_next_block_four")
+            block_one_pose = np.array([-0.25, -1.56, 1.84, 1.50, -1.34, 1.50])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.0001).all():
+                self.phase = "go_to_next_block_five"
+            return np.append(result, 0).tolist()
+            
+        if self.phase == "go_to_next_block_five":
+            print("go_to_next_block_five")
+            block_one_pose = np.array([-0.25, -1.56, 1.84, 1.50, -1.34, 1.50])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.0001).all() and tt > 250:
+                self.phase = "go_to_next_block_six"
+            return np.append(result, 1).tolist()
+            
+        if self.phase == "go_to_next_block_six":
+            print("go_to_next_block_six")
+            block_one_pose = np.array([-0.25, -2.10, 2.24, 1.00, -1.39, 1.50])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.0001).all():
+                self.phase = "go_to_next_block_seven"
+            return np.append(result, 1).tolist()
+            
+        if self.phase == "go_to_next_block_seven":
+            print("go_to_next_block_seven")
+            block_one_pose = np.array([-0.25, -2.70, 2.10, 1.00, -1.39, 1.50])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.0001).all():
+                self.phase = "go_to_next_block_eight"
+            return np.append(result, 1).tolist()
+        if self.phase == "go_to_next_block_eight":
+            print("go_to_next_block_eight")
+            block_one_pose = np.array([-0.20, -2.00, 1.90, 3.37, -1.37, 0.00])
+            result = self.move_to_joint_target(current_q, block_one_pose)
+            
+            q_diff = abs(current_q - result)
+            if (q_diff < 0.0001).all():
+                self.phase = "go_to_next_block_eight"
+            return np.append(result, 1).tolist()
 
         # done or error
         gripper_state = (

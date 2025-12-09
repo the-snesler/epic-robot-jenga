@@ -1,10 +1,11 @@
 """ur5e_controller controller."""
+#FOR ROBO NUM 2!!!!
 
 from controller.supervisor import Supervisor
 import numpy as np
 import cv2
 
-from jenga_bot import RobotPlacerWithVision
+from jenga_bot_second import RobotPlacerWithVision
 
 # ===== Optional: fast live preview with OpenCV =====
 try:
@@ -121,27 +122,27 @@ tt = 0
 controller = RobotPlacerWithVision(robot)  # Pass Supervisor instance
 current_q = [0, -1.4, 1.2, -2.0, -1.57, 1.03]
 
-# try:
-    # while robot.step(timestep) != -1:
-        # bgr = _camera_step_preview()
+try:
+    while robot.step(timestep) != -1:
+        bgr = _camera_step_preview()
 
-        # desired_command = controller.getRobotCommand(tt, current_q, bgr)
-        # tt+= 1
-        # print("controller 1 tt: " + str(tt))
+        desired_command = controller.getRobotCommand(tt, current_q, bgr)
+        tt+= 1
+        print("controller two tt: " + str(tt))
 
-        # current_q = desired_command[:-1]
+        current_q = desired_command[:-1]
 
-        # for j, motor in enumerate(motors):
-            # motor.setPosition(desired_command[j])
+        for j, motor in enumerate(motors):
+            motor.setPosition(desired_command[j])
 
-        # if desired_command[-1]:
-            # set_gripper_normalized(1)  # closed
+        if desired_command[-1]:
+            set_gripper_normalized(1)  # closed
 
-        # else:
-            # set_gripper_normalized(0)  # open
-# finally:
-    # if _HAS_CV2:
-        # try:
-            # cv2.destroyAllWindows()
-        # except Exception:
-            # pass
+        else:
+            set_gripper_normalized(0)  # open
+finally:
+    if _HAS_CV2:
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
