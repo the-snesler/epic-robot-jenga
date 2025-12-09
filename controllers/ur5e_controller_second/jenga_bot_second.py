@@ -312,26 +312,7 @@ class RobotPlacerWithVision:
             
             q_diff = abs(current_q - result)
             if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_seven"
-            return np.append(result, 1).tolist()
-            
-        if self.phase == "go_to_next_block_seven":
-            print("go_to_next_block_seven")
-            block_one_pose = np.array([-0.25, -2.70, 2.10, 1.00, -1.39, 1.50])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_eight"
-            return np.append(result, 1).tolist()
-        if self.phase == "go_to_next_block_eight":
-            print("go_to_next_block_eight")
-            block_one_pose = np.array([-0.20, -2.00, 1.90, 3.37, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_eight"
+                self.phase = "go_to_next_block_six"
             return np.append(result, 1).tolist()
 
         # done or error
