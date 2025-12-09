@@ -5,7 +5,7 @@ import math
 home_pos = [0, -1.4, 1.2, -2.0, -1.57, 1.03]  # home joint angles (not position)
 
 class RobotPlacerWithVision:
-    max_joint_vel = 1.2 # radians per second
+    max_joint_vel = 5.0 # radians per second
     DT = 0.016  # seconds (62.5 Hz)
 
     state = "move_search" # other: search, pick, move_place, place, done
@@ -17,7 +17,7 @@ class RobotPlacerWithVision:
     timeout = None
 
     # Tower geometry constants
-    TOWER_CENTER = np.array([2.54, 0.062, 0.715])  # World coordinates
+    TOWER_CENTER = np.array([2.76, 0.062, 1.015])  # World coordinates
     # to make them work, we had to switch X and Y, then reflect Y
     ROBOT_BASE = np.array([2.2, 0, 0.7])
     BLOCK_WIDTH = 0.05  # 50mm
@@ -453,14 +453,20 @@ class RobotPlacerWithVision:
         print(current_q)
 
         # pose = center left of tower, raised up 0.2 on Z with end rotated pi/2 around X
+        # target_pose = []
+        # target_pose = np.append(
+        #     self.TOWER_CENTER - self.ROBOT_BASE + [-0.25, 0, 0.4],
+        #     [0, -1.57, 0],
+        # )
         target_pose = np.append(
-            self.TOWER_CENTER - self.ROBOT_BASE + [0, self.BLOCK_WIDTH * 1.5 + 0.25, 0],
-            [-1.2092, -1.2092, 1.2092],
+            self.TOWER_CENTER - self.ROBOT_BASE + [0, self.BLOCK_WIDTH * 1.5 + 0.15, 0],
+            [-1.57, 0, 0],
         )
+        
         target_pose[2] += 0.2
         target_q = self.move_to_pose(target_pose, cur_angles)
         if target_q is not None:
-            self.set_target(np.array(list(target_q) + [False]), cur_angles)
+            self.set_target(np.array(list(target_q) + [True]), cur_angles)
 
         # done or error
         gripper_state = (

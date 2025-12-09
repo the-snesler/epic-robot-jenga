@@ -119,7 +119,7 @@ def set_gripper_width_mm(width_mm, max_open_mm=85.0):
 # -----------------------------------------------------------------------------
 tt = 0
 controller = RobotPlacerWithVision(robot)  # Pass Supervisor instance
-current_q = [-0.075, -1.69, 1.65, -1.53, -1.57, 1.50]
+current_q = [-0.518, -2.30, 2.21, -3.05, -1.05, 1.57]
 
 try:
     while robot.step(timestep) != -1:
