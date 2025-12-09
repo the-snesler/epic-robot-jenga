@@ -251,7 +251,7 @@ class RobotPlacerWithVision:
             result = self.move_to_joint_target(current_q, block_one_pose)
             
             q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
+            if (q_diff < 0.0001).all() and tt > 200:
                 self.phase = "go_to_next_block"
             return np.append(result, 1).tolist()
             
@@ -277,7 +277,7 @@ class RobotPlacerWithVision:
             
         if self.phase == "go_to_next_block_three":
             print("go_to_next_block_three")
-            block_one_pose = np.array([-0.25, -1.45, 1.80, 1.00, -1.37, 0.00])
+            block_one_pose = np.array([-0.25, -1.44, 1.75, 1.00, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
             
             q_diff = abs(current_q - result)
@@ -287,7 +287,7 @@ class RobotPlacerWithVision:
             
         if self.phase == "go_to_next_block_four":
             print("go_to_next_block_four")
-            block_one_pose = np.array([-0.25, -1.56, 1.84, 1.50, -1.34, 1.50])
+            block_one_pose = np.array([-0.20, -1.56, 1.83, 1.50, -1.34, 1.50])
             result = self.move_to_joint_target(current_q, block_one_pose)
             
             q_diff = abs(current_q - result)
@@ -297,11 +297,11 @@ class RobotPlacerWithVision:
             
         if self.phase == "go_to_next_block_five":
             print("go_to_next_block_five")
-            block_one_pose = np.array([-0.25, -1.56, 1.84, 1.50, -1.34, 1.50])
+            block_one_pose = np.array([-0.20, -1.53, 1.83, 1.50, -1.34, 1.50])
             result = self.move_to_joint_target(current_q, block_one_pose)
             
             q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all() and tt > 250:
+            if (q_diff < 0.0001).all() and tt > 400:
                 self.phase = "go_to_next_block_six"
             return np.append(result, 1).tolist()
             
