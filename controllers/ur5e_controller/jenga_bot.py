@@ -4,14 +4,29 @@ import math
 from scipy.spatial.transform import Rotation as R
 
 
-home_pos = [0, 0, 0, -math.pi/2, 0, 0, False]  # home position with gripper open
+# ------------------------------------------------------------
+# Global robot configuration
+# ------------------------------------------------------------
+
+# Home joint configuration (with gripper open)
+home_pos = [0, 0, 0, -math.pi/2, 0, 0, False]
+
 
 class RobotPlacerWithVision:
-    max_joint_vel = 1.2 # radians per second
-    DT = 0.016  # seconds (62.5 Hz)
+    """
+    High‑level controller for a Webots robot that:
+    - Locates Jenga blocks in the scene tree
+    - Moves toward them using joint‑space interpolation
+    - Performs nudging motions to adjust block positions
+    """
 
-    state = "move_search" # other: search, pick, move_place, place, done
-    target = "red" # other: blue
+    # Motion parameters
+    max_joint_vel = 1.2     # rad/s
+    DT = 0.016              # timestep (62.5 Hz)
+
+    # State machine
+    state = "move_search"
+    target = "red"
 
     # Interpolation tracking
     target_q = None
@@ -19,74 +34,79 @@ class RobotPlacerWithVision:
     timeout = None
 
     # Tower geometry constants
-    TOWER_CENTER = np.array([-0.062, 2.71, 0.715])  # World coordinates
-    BLOCK_WIDTH = 0.05  # 50mm
-    BLOCK_LENGTH = 0.15  # 150mm
-    BLOCK_HEIGHT = 0.03  # 30mm
-    LAYER_HEIGHT = 0.03  # 30mm per layer
+    TOWER_CENTER = np.array([-0.062, 2.71, 0.715])
+    BLOCK_WIDTH = 0.05
+    BLOCK_LENGTH = 0.15
+    BLOCK_HEIGHT = 0.03
+    LAYER_HEIGHT = 0.03
 
     def __init__(self, robot=None):
-        """Initialize the robot controller
+        """
+        Initialize the robot controller.
 
         Args:
-            robot: Webots Supervisor instance for accessing scene objects
+            robot: Webots Supervisor instance for scene access
         """
         self.robot = robot
         self.phase = "find_next_block"
         self.layer = 1
         self.block_num = 2
 
+
+    # ------------------------------------------------------------
+    # Scene tree block lookup
+    # ------------------------------------------------------------
+
     def get_block_position(self, layer, block_num):
-        """Get the current position of a block from Webots
+        """
+        Retrieve the world position of a block from Webots.
 
         Args:
-            layer: Layer number (1-9)
-            block_num: Block number in layer (1-3)
+            layer: Layer index (1–9)
+            block_num: Block index (1–3)
 
         Returns:
-            np.array([x, y, z]) position or None if block not found
+            np.array([x, y, z]) or None if not found
         """
         if self.robot is None:
             return None
 
         block_name = f"solid({layer}{block_num})"
 
-        # Try to get the block node from the scene tree
-        # Since blocks don't have DEF names, we need to search by name
         try:
-            # Get root node and search children
             root = self.robot.getRoot()
             children_field = root.getField("children")
 
+            # Search entire scene tree recursively
             for i in range(children_field.getCount()):
                 node = children_field.getMFNode(i)
                 if node is None:
                     continue
 
-                # Search recursively in the scene tree
                 block_node = self._find_node_by_name(node, block_name)
                 if block_node is not None:
                     translation_field = block_node.getField("translation")
                     if translation_field:
-                        pos = translation_field.getSFVec3f()
-                        return np.array(pos)
+                        return np.array(translation_field.getSFVec3f())
 
-            print(f"Warning: Block {block_name} not found in scene")
+            print(f"Warning: Block {block_name} not found")
             return None
 
         except Exception as e:
-            print(f"Error getting block position for {block_name}: {e}")
+            print(f"Error retrieving block {block_name}: {e}")
             return None
 
+
     def _find_node_by_name(self, node, target_name):
-        """Recursively search for a node by checking its DEF or internal name
+        """
+        Recursively search for a node by its internal name.
 
         Args:
-            node: Current node to search
-            target_name: Name to search for (e.g., "solid(11)")
+            node: Node to search
+            target_name: Name string to match
 
         Returns:
-            Node if found, None otherwise
+            Node or None
         """
         if node is None:
             return None
@@ -94,11 +114,10 @@ class RobotPlacerWithVision:
         # Check DEF name
         def_name = node.getField("name")
         if def_name is not None:
-            def_name = def_name.getSFString()
-            if def_name == target_name:
+            if def_name.getSFString() == target_name:
                 return node
 
-        # Check if node has children field
+        # Recursively search children
         try:
             children_field = node.getField("children")
             if children_field:
@@ -111,13 +130,20 @@ class RobotPlacerWithVision:
             pass
 
         return None
-        
+
+
+    # ------------------------------------------------------------
+    # Kinematics helpers
+    # ------------------------------------------------------------
+
     def limit_clamp(self, q):
+        """Clamp joint angles to robot limits."""
         low = np.array([-2.9671, -2.0, -2.9671, -3.1416, -2.9671, -0.0873])
-        high = np.array([ 2.9671, 0.0, 2.9671, -0.4000, 2.9671, 3.8223])
+        high = np.array([2.9671, 0.0, 2.9671, -0.4000, 2.9671, 3.8223])
         return np.clip(q, low, high)
-        
+
     def q_to_pose(self, q):
+        """Convert joint angles to pose [x,y,z,rotvec]."""
         T = getFK(q)
         p = T[:3, 3]
         Rm = T[:3, :3]
@@ -126,26 +152,27 @@ class RobotPlacerWithVision:
 
 
     def block_position_to_desired_pose(self, current_q, target_q, rate_alpha=0.12):
+        """
+        Compute a smoothed IK step toward a target pose.
+        """
         desired_pose = self.q_to_pose(target_q)
         q_next_full = getIK(0, desired_pose, current_q)
-        
-        # Interpolate: move only rate_alpha fraction toward the full target joints
+
+        # Smooth interpolation
         delta_q = q_next_full - current_q
         q_interpolated = current_q + rate_alpha * delta_q
-        
+
         return limit_clamp(np.array(q_interpolated, dtype=float))
 
+
     def get_tower_top_height(self):
-        """Calculate the Z-coordinate of the top of the tower
-
-        Returns:
-            float: Z-coordinate of tower top, or estimated value if blocks not accessible
         """
-        # Try to find the highest block that still exists
-        max_height = self.TOWER_CENTER[2]  # Base height
+        Compute the highest Z coordinate of any existing block.
+        """
+        max_height = self.TOWER_CENTER[2]
 
-        for layer in range(1, 10):  # Layers 1-9
-            for block_num in range(1, 4):  # Blocks 1-3
+        for layer in range(1, 10):
+            for block_num in range(1, 4):
                 pos = self.get_block_position(layer, block_num)
                 if pos is not None:
                     block_top = pos[2] + self.BLOCK_HEIGHT / 2
@@ -153,194 +180,217 @@ class RobotPlacerWithVision:
 
         return max_height
 
+
+    # ------------------------------------------------------------
+    # Joint‑space interpolation
+    # ------------------------------------------------------------
+
     def move_to_joint_target(self, current_q_full, target_joint_angles, rate=0.15):
         """
-        Smooth joint-space interpolation to a hardcoded (or any) joint target.
-        Super stable – never flips configuration.
-        
-        current_q_full:      the 7-element list from Webots [q0..q5, gripper]
-        target_joint_angles: list or array of 6 desired joint values
-        rate:                how fast to move (0.05–0.25 is smooth and safe)
+        Smoothly interpolate toward a target joint configuration.
+
+        Args:
+            current_q_full: 7‑element list [q0..q5, gripper]
+            target_joint_angles: 6‑element target joint vector
+            rate: interpolation factor (0.05–0.25)
         """
-        # Extract only the 6 joints
         q_now = np.array(current_q_full[:6], dtype=float)
         q_target = np.array(target_joint_angles, dtype=float)
-    
-        # Solve full IK at the target (to make sure it's reachable and pick the best solution)
-        target_pose = self.q_to_pose(q_target)           # convert target joints → pose
-        q_ik = getIK(0, target_pose, q_now)               # seed with current = stays in same config!
-    
-        # Smooth interpolation in joint space
-        delta = q_ik - q_now
-        q_next = q_now + rate * delta
-    
-        # Clamp to physical limits
-        q_next = self.limit_clamp(q_next)
-    
-        return q_next
+
+        # Compute IK for the target pose (keeps configuration consistent)
+        target_pose = self.q_to_pose(q_target)
+        q_ik = getIK(0, target_pose, q_now)
+
+        # Smooth interpolation
+        q_next = q_now + rate * (q_ik - q_now)
+
+        return self.limit_clamp(q_next)
+
+
     def set_target(self, target_angles, current_angles):
-        """Set a new movement target and start interpolation"""
+        """Begin interpolation toward a new target."""
         self.target_q = target_angles.copy()
         self.is_moving = True
 
     def set_speed(self, speed):
-        """Set the maximum joint velocity (radians per second)"""
+        """Set max joint velocity."""
         self.max_joint_vel = speed
 
     def set_timeout(self, timeout_tt):
-        """Set a timeout timestep to block new commands until after that time"""
+        """Block new commands until a future timestep."""
         self.timeout = timeout_tt
 
+
     def step_to_target(self, cur_angles):
-        if self.target_q is not None:
-            # Calculate max step per joint based on velocity limit
-            max_step = self.max_joint_vel * self.DT
+        """
+        Perform one interpolation step toward target_q.
+        """
+        if self.target_q is None:
+            return None
 
-            # Interpolate each joint angle
-            new_angles = []
-            all_reached = True
-            for i in range(6):
-                current_diff = self.target_q[i] - cur_angles[i]
+        max_step = self.max_joint_vel * self.DT
+        new_angles = []
+        all_reached = True
 
-                # If we're close enough to target, snap to it
-                if abs(current_diff) < 0.001:
-                    new_angles.append(self.target_q[i])
-                else:
-                    # Move towards target, but don't exceed max velocity
-                    step = np.clip(current_diff, -max_step, max_step)
-                    new_angles.append(cur_angles[i] + step)
-                    all_reached = False
+        for i in range(6):
+            diff = self.target_q[i] - cur_angles[i]
 
-            if all_reached:
-                self.is_moving = False
+            if abs(diff) < 0.001:
+                new_angles.append(self.target_q[i])
+            else:
+                step = np.clip(diff, -max_step, max_step)
+                new_angles.append(cur_angles[i] + step)
+                all_reached = False
 
-            gripper_state = self.target_q[6] if len(self.target_q) > 6 else False
-            return new_angles + [gripper_state]
+        if all_reached:
+            self.is_moving = False
+
+        gripper = self.target_q[6] if len(self.target_q) > 6 else False
+        return new_angles + [gripper]
+
+
+    # ------------------------------------------------------------
+    # Main control loop
+    # ------------------------------------------------------------
 
     def getRobotCommand(self, tt, current_q, current_image_bgr):
+        """
+        Main state machine for robot control.
+
+        Args:
+            tt: timestep
+            current_q: current joint configuration
+            current_image_bgr: camera image (unused)
+        """
         cur_angles = current_q.copy()[0:6]
         cur_pose = forwardKinematics(cur_angles)
-        cur_pos = cur_pose[:3,3]
-        # print("Current state:", self.state, "at position", cur_pos, "is_moving:", self.is_moving)
-        # print("Current angles:", cur_angles)
+        cur_pos = cur_pose[:3, 3]
 
-        # Handle interpolation if we're currently moving
+        # If currently interpolating, continue
         if self.is_moving and self.target_q is not None:
             return self.step_to_target(cur_angles)
 
-        if self.timeout is not None and tt < self.timeout:
-            return np.append(current_q, self.target_q[6]) # type: ignore
+        # Handle timeout
+        if self.timeout is not None:
+            if tt < self.timeout:
+                return np.append(current_q, self.target_q[6])
+            else:
+                self.timeout = None
 
-        if self.timeout is not None and tt >= self.timeout:
-            self.timeout = None
+        # ------------------------------------------------------------
+        # State machine phases
+        # ------------------------------------------------------------
 
-        # State machine logic
-        # Uncomment this code if the robo gets stuck under da table again :(
-        # print(tt)
-        # if tt < 50:
-            # return np.array([-0.94, -0.0, 0.5, 0, 0, 0, False])
-        # elif tt < 100:
-            # return np.array([-0.94, -2.00, 0.5, 0, 0, 0, False])
         if self.phase == "find_next_block":
+            # Advance through block indices
             self.layer += 2
             if self.layer > 10:
-                self.layer -= 7 
+                self.layer -= 7
                 self.block_num += 1
                 if self.block_num > 3:
                     self.block_num = 0
+
             self.desired_block_pos = self.get_block_position(self.layer, self.block_num)
             print(self.desired_block_pos)
             self.phase = "go_to_next_block"
-            
+
+        # ------------------------------------------------------------
+        # Move to initial approach pose
+        # ------------------------------------------------------------
         if self.phase == "go_to_next_block":
             block_one_pose = np.array([-0.20, -1.80, 1.90, 1.57, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
+
+            if np.all(abs(current_q - result) < 0.001):
                 self.phase = "move_towards_block"
+
             return np.append(result, 1).tolist()
-            
+
+        # ------------------------------------------------------------
+        # Move closer to block
+        # ------------------------------------------------------------
         if self.phase == "move_towards_block":
             print("move_towards_block")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
             block_one_pose = np.array([-0.20, -1.58, 2.00, 1.70, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
+
+            if np.all(abs(current_q - result) < 0.001):
                 self.phase = "nudge_block_one"
+
             return np.append(result, 1).tolist()
+
+        # ------------------------------------------------------------
+        # Nudging sequence
+        # ------------------------------------------------------------
         if self.phase == "nudge_block_one":
             print("nudge_block_one")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
             block_one_pose = np.array([-0.20, -1.46, 1.80, 1.90, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
+
+            if np.all(abs(current_q - result) < 0.0001):
                 self.phase = "nudge_block_two"
+
             return np.append(result, 1).tolist()
-            
+
         if self.phase == "nudge_block_two":
             print("nudge_block_two")
-            # ## block_one_pose = np.array([-0.20, -1.39, 1.70, 1.70, -1.37, 0.00])
             block_one_pose = np.array([-0.20, -1.355, 1.66, 1.70, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
+
+            if np.all(abs(current_q - result) < 0.001):
                 self.phase = "nudge_block_five"
+
             return np.append(result, 1).tolist()
-            
+
         if self.phase == "nudge_block_three":
             print("nudge_block_three")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
             block_one_pose = np.array([-0.20, -1.37, 1.70, 1.70, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
+
+            if np.all(abs(current_q - result) < 0.001):
                 self.phase = "nudge_block_four"
+
             return np.append(result, 1).tolist()
-            
+
         if self.phase == "nudge_block_four":
             print("nudge_block_four")
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
             block_one_pose = np.array([-0.20, -1.80, 1.90, 1.57, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
+
+            if np.all(abs(current_q - result) < 0.001):
                 self.phase = "recover_block_one"
+
             return np.append(result, 1).tolist()
-            
+
+        # ------------------------------------------------------------
+        # Recovery motion
+        # ------------------------------------------------------------
         if self.phase == "recover_block_one":
-            # ## block_one_pose = np.array([-0.34, -1.30, 2.40, 1.5, -1.37, 1.00])
             block_one_pose = np.array([0.00, -2.00, 2.90, 1.57, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.001).all():
-                self.phase = "recover_block_one"
+
+            if np.all(abs(current_q - result) < 0.001):
+                self.phase = "recover_block_one"  # (Probably intended to change)
+
             return np.append(result, 1).tolist()
-            
+
         if self.phase == "nudge_block_five":
             print("nudge_block_five")
-            # ## block_one_pose = np.array([-0.20, -1.39, 1.70, 1.70, -1.37, 0.00])
             block_one_pose = np.array([-0.20, -1.30, 1.62, 1.70, -1.37, 0.00])
             result = self.move_to_joint_target(current_q, block_one_pose)
-            
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "nudge_block_three"
-            return np.append(result, 1).tolist()
-            
 
-        # done or error
+            if np.all(abs(current_q - result) < 0.0001):
+                self.phase = "nudge_block_three"
+
+            return np.append(result, 1).tolist()
+
+        # ------------------------------------------------------------
+        # Default fallback
+        # ------------------------------------------------------------
         gripper_state = (
             self.target_q[6]
             if self.target_q is not None and len(self.target_q) >= 7
             else False
         )
+
         return np.append(current_q[:6], gripper_state)
