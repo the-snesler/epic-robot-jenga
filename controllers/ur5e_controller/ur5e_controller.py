@@ -119,7 +119,7 @@ def _camera_step_preview():
 # -----------------------------------------------------------------------------
 tt = 0
 controller = RobotPlacerWithVision(robot)  # Pass Supervisor instance
-current_q = [0, -1.4, 1.2, -2.0, -1.57, 1.03]
+current_q = [0, -2.1, 2.9, -2.8, -1.57, 0.0]
 
 try:
     while robot.step(timestep) != -1:
@@ -127,9 +127,10 @@ try:
 
         desired_command = controller.getRobotCommand(tt, current_q, bgr)
         tt+= 1
-        print("controller 1 tt: " + str(tt))
 
         current_q = desired_command[:-1]
+
+        print("controller 1 tt: " + str(tt) + " current_q: " + str(current_q))
 
         for j, motor in enumerate(motors):
             motor.setPosition(desired_command[j])

@@ -5,7 +5,7 @@ import math
 from scipy.spatial.transform import Rotation as R
 
 # Home position with gripper open
-home_pos = [0, 0, 0, -math.pi/2, 0, 0, False]  
+home_pos = [0, -2.1, 2.1, -3.0, -1.57, 0.0, True]
 
 class RobotPlacerWithVision:
     # Class constants
@@ -292,79 +292,5 @@ class RobotPlacerWithVision:
         if self.timeout is not None and tt >= self.timeout:
             self.timeout = None
 
-        # State machine logic for different robot phases
-        if self.phase == "align_first_guy":
-            print("align_first_guy")
-            block_one_pose = np.array([-0.20, -2.00, 1.90, 3.37, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all() and tt > 200:
-                self.phase = "go_to_next_block"
-            return np.append(result, 1).tolist()
-
-        if self.phase == "go_to_next_block":
-            print("go_to_next_block")
-            block_one_pose = np.array([-0.25, -1.95, 2.10, 3.37, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_two"
-            return np.append(result, 0).tolist()
-
-        if self.phase == "go_to_next_block_two":
-            print("go_to_next_block_two")
-            block_one_pose = np.array([-0.25, -1.60, 1.90, 1.00, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_three"
-            return np.append(result, 0).tolist()
-
-        if self.phase == "go_to_next_block_three":
-            print("go_to_next_block_three")
-            block_one_pose = np.array([-0.25, -1.44, 1.75, 1.00, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_four"
-            return np.append(result, 1).tolist()
-
-        if self.phase == "go_to_next_block_four":
-            print("go_to_next_block_four")
-            block_one_pose = np.array([-0.20, -1.56, 1.83, 1.50, -1.34, 1.50])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_five"
-            return np.append(result, 0).tolist()
-
-        if self.phase == "go_to_next_block_five":
-            print("go_to_next_block_five")
-            block_one_pose = np.array([-0.20, -1.53, 1.83, 1.50, -1.34, 1.50])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all() and tt > 400:
-                self.phase = "go_to_next_block_six"
-            return np.append(result, 1).tolist()
-
-        if self.phase == "go_to_next_block_six":
-            print("go_to_next_block_six")
-            block_one_pose = np.array([-0.25, -2.10, 2.24, 1.00, -1.39, 1.50])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_six"  # Stuck in the last phase, could be a placeholder for error handling
-            return np.append(result, 1).tolist()
-
-        # If no phase matches, return current joint angles and gripper state
-        gripper_state = (
-            self.target_q[6] if self.target_q is not None and len(self.target_q) >= 7 else False
-        )
-        return np.append(current_q[:6], gripper_state)
+        # go to home pos
+        return home_pos

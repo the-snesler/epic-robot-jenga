@@ -69,6 +69,19 @@ def forwardKinematics(q):
     T = T01(q[0]) @ T12(q[1]) @ T23(q[2]) @ T34(q[3]) @ T45(q[4]) @ T56(q[5])
     return T
 
+def transformMatrixToPose(T):
+    """Converts a homogeneous transformation matrix to a pose [x,y,z,wx,wy,wz] where w is in exponential coordinates.
+
+    Args:
+        T: A 4x4 numpy array representing the homogeneous transformation matrix
+    Returns:
+        A six-element numpy array representing the position (3) and orientation (3, exponential coordinates)
+    """
+    p = T[:3, 3]
+    Rm = T[:3, :3]
+    w = R.from_matrix(Rm).as_rotvec()
+    return np.concatenate([p, w])
+
 
 # def transformError(T_d, T_c):
     # """Calculates the error between two homogeneous transformation matrices
