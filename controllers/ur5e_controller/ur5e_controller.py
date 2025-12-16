@@ -119,7 +119,7 @@ def _camera_step_preview():
 # -----------------------------------------------------------------------------
 tt = 0
 controller = RobotPlacerWithVision(robot)  # Pass Supervisor instance
-current_q = [0, -2.1, 2.9, -2.8, -1.57, 0.0]
+current_q = [0, -2.1, 2.1, -3.0, -1.57, 0.0]
 
 try:
     while robot.step(timestep) != -1:
