@@ -1,4 +1,3 @@
-# Import necessary modules
 from utils import *
 import numpy as np
 import math
@@ -8,362 +7,442 @@ home_pose = [0, -2.1, 2.1, -3.0, -1.57, 0.0, True]
 robot_world_coords = np.array([-0.100074, 3.67, 0.27, 0.0, 0.0, 1.0, -1.5707453]) # x, y, z, rotvec
 
 class RobotPlacerWithVision:
-    # Class constants
-    max_joint_vel = 1.2  # Maximum joint velocity in radians per second
-    DT = 0.016  # Time step (62.5 Hz)
-    
-    # Initial state setup
-    state = "move_search"  # Possible states: search, pick, move_place, place, done
-    target = "red"  # Target color: "red" or "blue"
+    """
+    High‑level controller for a Webots robot that:
+    - Locates Jenga blocks in the scene tree
+    - Moves toward them using joint‑space interpolation
+    - Performs nudging motions to adjust block positions
+    """
 
-    # Interpolation tracking variables
+    # Motion parameters
+    max_joint_vel = 0.5     # rad/s
+    DT = 0.016              # timestep (62.5 Hz)
+
+    # State machine
+    state = "move_search"
+    target = "red"
+
+    # Interpolation tracking
     target_q = None
     is_moving = False
-    timeout = None
+    grab_timer = None
+    release_timer = 0
+    nudge_timer = 0
 
     # Tower geometry constants
-    BLOCK_WIDTH = 0.05  # Width of a block (50mm)
-    BLOCK_LENGTH = 0.15  # Length of a block (150mm)
-    BLOCK_HEIGHT = 0.03  # Height of a block (30mm)
-    LAYER_HEIGHT = 0.03  # Height per layer of blocks (30mm)
+    BLOCK_WIDTH = 0.05
+    BLOCK_LENGTH = 0.17
+    BLOCK_HEIGHT = 0.05
+    LAYER_HEIGHT = 0.05
 
     def __init__(self, robot=None):
-        """Initialize the robot controller
-        
+        """
+        Initialize the robot controller.
+
         Args:
-            robot: Webots Supervisor instance for accessing scene objects
+            robot: Webots Supervisor instance for scene access
         """
         self.robot = robot
-        self.phase = "align_first_guy"
-        self.layer = 1
-        self.block_num = 2
-
-    def get_block_position(self, layer, block_num):
-        """Get the current position of a block from Webots
+        self.phase = "find_next_block"
+        self.layer = 3
+        self.block_num = 1
         
-        Args:
-            layer: Layer number (1-9)
-            block_num: Block number in layer (1-3)
+        # Simulated grab state
+        self.grabbed_block_node = None
+        self.block_offset_robot_frame = None
+        self.grabbed_block_initial_pos = None
+        self.block_physics_node = None  # Store original physics node
         
-        Returns:
-            np.array([x, y, z]): Position of the block or None if block is not found
-        """
-        if self.robot is None:
-            return None
+        # Phase timers
+        self.release_timer = 0
+        self.nudge_timer = 0
 
-        block_name = f"solid({layer}{block_num})"
 
-        # Try to get the block node from the scene tree
-        try:
-            root = self.robot.getRoot()
-            children_field = root.getField("children")
+    # ------------------------------------------------------------
+    # Kinematics helpers
+    # ------------------------------------------------------------
 
-            for i in range(children_field.getCount()):
-                node = children_field.getMFNode(i)
-                if node is None:
-                    continue
-
-                # Search recursively in the scene tree
-                block_node = self._find_node_by_name(node, block_name)
-                if block_node is not None:
-                    translation_field = block_node.getField("translation")
-                    if translation_field:
-                        pos = translation_field.getSFVec3f()
-                        return np.array(pos)
-
-            print(f"Warning: Block {block_name} not found in scene")
-            return None
-
-        except Exception as e:
-            print(f"Error getting block position for {block_name}: {e}")
-            return None
-
-    def _find_node_by_name(self, node, target_name):
-        """Recursively search for a node by checking its DEF or internal name
-        
-        Args:
-            node: Current node to search
-            target_name: Name to search for (e.g., "solid(11)")
-        
-        Returns:
-            Node if found, None otherwise
-        """
-        if node is None:
-            return None
-
-        # Check DEF name
-        def_name = node.getField("name")
-        if def_name is not None:
-            def_name = def_name.getSFString()
-            if def_name == target_name:
-                return node
-
-        # Check if node has children field and search recursively
-        try:
-            children_field = node.getField("children")
-            if children_field:
-                for i in range(children_field.getCount()):
-                    child = children_field.getMFNode(i)
-                    result = self._find_node_by_name(child, target_name)
-                    if result is not None:
-                        return result
-        except:
-            pass
-
-        return None
-
-    def limit_clamp(self, q):
-        """Clamp joint values to the robot's physical limits
-        
-        Args:
-            q: Array of joint angles to clamp
-        
-        Returns:
-            np.array: Clamped joint angles
-        """
-        low = np.array([-2.9671, -2.0, -2.9671, -3.1416, -2.9671, -0.0873])
-        high = np.array([2.9671, 0.0, 2.9671, -0.4000, 2.9671, 3.8223])
-        return np.clip(q, low, high)
 
     def q_to_pose(self, q):
-        """Convert joint angles to pose (position + rotation vector)
-        
-        Args:
-            q: Array of joint angles
-        
-        Returns:
-            np.array: Position and rotation vector (3D position + 3D rotation)
-        """
-        T = getFK(q)  # Forward kinematics for the joint angles
-        p = T[:3, 3]  # Extract position from transformation matrix
-        Rm = T[:3, :3]  # Extract rotation matrix
-        w = R.from_matrix(Rm).as_rotvec()  # Convert rotation matrix to rotation vector
-        return np.concatenate([p, w])  # Combine position and rotation vector
+        """Convert joint angles to pose [x,y,z,rotvec]."""
+        T = getFK(q)
+        p = T[:3, 3]
+        Rm = T[:3, :3]
+        w = R.from_matrix(Rm).as_rotvec()
+        return np.concatenate([p, w])
+
 
     def block_position_to_desired_pose(self, current_q, target_q, rate_alpha=0.12):
-        """Interpolate between the current and target joint configurations
-        
-        Args:
-            current_q: Current joint configuration
-            target_q: Target joint configuration
-            rate_alpha: Interpolation rate (between 0 and 1)
-        
-        Returns:
-            np.array: Interpolated joint angles
         """
-        desired_pose = self.q_to_pose(target_q)  # Convert target joint angles to pose
-        q_next_full = getIK(0, desired_pose, current_q)  # Solve IK to get next joint angles
-        
-        # Interpolate towards the full target joint configuration
+        Compute a smoothed IK step toward a target pose.
+        """
+        desired_pose = self.q_to_pose(target_q)
+        q_next_full = getIK(desired_pose, current_q)
+
+        # Smooth interpolation
         delta_q = q_next_full - current_q
         q_interpolated = current_q + rate_alpha * delta_q
-        
-        return self.limit_clamp(np.array(q_interpolated, dtype=float))  # Return clamped interpolated angles
+
+        return np.array(q_interpolated, dtype=float)
+
 
     def get_tower_top_height(self):
-        """Calculate the Z-coordinate of the top of the tower
-        
-        Returns:
-            float: Z-coordinate of the tower top, or estimated value if blocks not accessible
         """
-        max_height = self.TOWER_CENTER[2]  # Base height of the tower
+        Compute the highest Z coordinate of any existing block.
+        """
+        max_height = 0
+        if self.robot is None:
+            return max_height
 
-        # Loop through each layer and block to find the highest block
-        for layer in range(1, 10):  # Layers 1-9
-            for block_num in range(1, 4):  # Blocks 1-3
-                pos = self.get_block_position(layer, block_num)
+        for layer in range(1, 10):
+            for block_num in range(1, 4):
+                pos = get_block_position(self.robot.getRoot(), layer, block_num)
                 if pos is not None:
                     block_top = pos[2] + self.BLOCK_HEIGHT / 2
                     max_height = max(max_height, block_top)
 
         return max_height
 
-    def move_to_joint_target(self, current_q_full, target_joint_angles, rate=0.15):
-        """Smoothly move the robot's joints to the target configuration
+
+    def disable_block_physics(self, block_node):
+        """
+        Disable physics simulation for a block to prevent collisions.
+        Removes the Physics node to make the block intangible.
         
         Args:
-            current_q_full: Current joint angles (including gripper state)
-            target_joint_angles: Target joint angles (without gripper state)
-            rate: Rate of movement (0.05–0.25 is smooth and safe)
-        
-        Returns:
-            np.array: Next joint configuration
+            block_node: Webots node reference
         """
-        q_now = np.array(current_q_full[:6], dtype=float)  # Get only the 6 joint angles
+        if block_node is None:
+            return
+        
+        try:
+            # Get the physics field
+            physics_field = block_node.getField("physics")
+            if physics_field is None:
+                print("Block has no physics field")
+                return
+            
+            # Store the original physics node for restoration later
+            self.block_physics_node = physics_field.getSFNode()
+            
+            if self.block_physics_node is not None:
+                # Remove the physics node (makes block intangible)
+                physics_field.removeSF()
+                print("Disabled physics for grabbed block")
+            else:
+                print("Block already has no physics")
+        except Exception as e:
+            print(f"Could not disable physics: {e}")
+    
+    def enable_block_physics(self, block_node):
+        """
+        Re-enable physics simulation for a block.
+        Restores the Physics node that was removed earlier.
+        
+        Args:
+            block_node: Webots node reference
+        """
+        if block_node is None:
+            return
+        
+        try:
+            physics_field = block_node.getField("physics")
+            if physics_field is None:
+                print("Block has no physics field")
+                return
+            
+            # Restore the physics node if we saved it
+            if self.block_physics_node is not None:
+                # Export the physics node as string and re-import it
+                physics_string = self.block_physics_node.exportString()
+                physics_field.importSFNodeFromString(physics_string)
+                self.block_physics_node = None
+                print("Re-enabled physics for released block")
+            else:
+                print("No physics node to restore")
+        except Exception as e:
+            print(f"Could not enable physics: {e}")
+    
+    def update_grabbed_block_position(self, current_q):
+        """
+        Update the position of the grabbed block to maintain offset from gripper.
+        
+        Args:
+            current_q: Current joint configuration
+        """
+        if self.grabbed_block_node is None or self.block_offset_robot_frame is None:
+            return
+        
+        # Get current gripper position in robot frame
+        T = getFK(current_q[:6])
+        gripper_pos_robot = T[:3, 3]
+        
+        # Add offset to get block position in robot frame
+        block_pos_robot = gripper_pos_robot + self.block_offset_robot_frame
+        
+        # Transform to world coordinates
+        robot_pos = robot_world_coords[:3]
+        robot_rotvec = np.array(robot_world_coords[3:6]) * robot_world_coords[6]
+        rot = R.from_rotvec(robot_rotvec)
+        
+        block_pos_world = robot_pos + rot.apply(block_pos_robot)
+        
+        # Update block position in Webots
+        translation_field = self.grabbed_block_node.getField("translation")
+        if translation_field:
+            translation_field.setSFVec3f(block_pos_world.tolist())
+
+
+    # ------------------------------------------------------------
+    # Joint‑space interpolation
+    # ------------------------------------------------------------
+
+    def move_to_joint_target(self, current_q_full, target_joint_angles, rate=0.15):
+        """
+        Smoothly interpolate toward a target joint configuration.
+
+        Args:
+            current_q_full: 7‑element list [q0..q5, gripper]
+            target_joint_angles: 6‑element target joint vector
+            rate: interpolation factor (0.05–0.25)
+        """
+        q_now = np.array(current_q_full[:6], dtype=float)
         q_target = np.array(target_joint_angles, dtype=float)
 
-        # Solve full IK at the target to ensure it's reachable and pick the best solution
-        target_pose = self.q_to_pose(q_target)  # Convert target joint angles to pose
-        q_ik = getIK(0, target_pose, q_now)  # Inverse kinematics
-
-        # Smooth interpolation in joint space
-        delta = q_ik - q_now
-        q_next = q_now + rate * delta
-
-        # Clamp to physical limits
-        q_next = self.limit_clamp(q_next)
+        # Smooth interpolation
+        q_next = q_now + rate * (q_target - q_now)
 
         return q_next
 
+
     def set_target(self, target_angles, current_angles):
-        """Set a new target joint configuration for movement
-        
-        Args:
-            target_angles: Target joint angles
-            current_angles: Current joint angles (for interpolation)
-        """
+        """Begin interpolation toward a new target."""
         self.target_q = target_angles.copy()
         self.is_moving = True
 
     def set_speed(self, speed):
-        """Set the maximum joint velocity (radians per second)
-        
-        Args:
-            speed: Maximum joint velocity in radians per second
-        """
+        """Set max joint velocity."""
         self.max_joint_vel = speed
 
     def set_timeout(self, timeout_tt):
-        """Set a timeout to block new commands until the specified time
-        
-        Args:
-            timeout_tt: Timeout time step
-        """
+        """Block new commands until a future timestep."""
         self.timeout = timeout_tt
 
-    def step_to_target(self, cur_angles):
-        """Move the robot step by step toward the target joint angles
-        
-        Args:
-            cur_angles: Current joint angles
-        
-        Returns:
-            np.array: Next joint angles (including gripper state)
-        """
-        if self.target_q is not None:
-            max_step = self.max_joint_vel * self.DT  # Max step per joint based on velocity limit
 
-            new_angles = []
-            all_reached = True
-            for i in range(6):
-                current_diff = self.target_q[i] - cur_angles[i]
-
-                # If we're close enough to target, snap to it
-                if abs(current_diff) < 0.001:
-                    new_angles.append(self.target_q[i])
-                else:
-                    # Move towards target, but don't exceed max velocity
-                    step = np.clip(current_diff, -max_step, max_step)
-                    new_angles.append(cur_angles[i] + step)
-                    all_reached = False
-
-            if all_reached:
-                self.is_moving = False  # Stop moving if all joints are at the target
-
-            # Handle the gripper state (if included in target_q)
-            gripper_state = self.target_q[6] if len(self.target_q) > 6 else False
-            return new_angles + [gripper_state]
+    # ------------------------------------------------------------
+    # Main control loop
+    # ------------------------------------------------------------
 
     def getRobotCommand(self, tt, current_q, current_image_bgr):
-        """Get the robot's command based on the current state and time step
-        
-        Args:
-            tt: Current time step
-            current_q: Current joint angles (including gripper state)
-            current_image_bgr: Current image captured by the robot's camera
-        
-        Returns:
-            np.array: New joint angles and gripper state
         """
-        cur_angles = current_q.copy()[:6]  # Get the 6 joint angles (excluding gripper)
-        cur_pose = forwardKinematics(cur_angles)  # Compute forward kinematics
-        cur_pos = cur_pose[:3, 3]  # Extract the position from the forward kinematics
+        Main state machine for robot control.
 
-        # Handle interpolation if the robot is currently moving
-        if self.is_moving and self.target_q is not None:
-            return self.step_to_target(cur_angles)
+        Args:
+            tt: timestep
+            current_q: current joint configuration
+            current_image_bgr: camera image (unused)
+        """
+        cur_angles = current_q.copy()[0:6]
+        cur_pose = getFK(cur_angles)
+        cur_pos = cur_pose[:3, 3]
+        
+        if self.robot is None:
+            return np.append(home_pose, True).tolist()
 
-        # If a timeout is set, prevent new commands until the timeout has passed
-        if self.timeout is not None and tt < self.timeout:
-            return np.append(current_q, self.target_q[6])  # Return the current joint angles and gripper state
+        print("controller 2 tt: " + str(tt) + " phase: " + str(self.phase))
+    
+        if self.phase == "find_next_block":
+            # Get position of next block in layer 3
+            block_pos = get_block_position(self.robot.getRoot(), 3, self.block_num)
+            
+            if block_pos is None:
+                print(f"Block 3-{self.block_num} not found, skipping")
+                self.block_num += 1
+                if self.block_num > 3:
+                    self.phase = "done"
+                return np.append(current_q[:6], False)
+            
+            # Get block node reference for later manipulation
+            self.grabbed_block_node = get_block_node(self.robot.getRoot(), 3, self.block_num)
+            self.grabbed_block_initial_pos = block_pos.copy()
+            
+            # Transform block position from world to robot frame
+            # Extract robot world position and rotation
+            robot_pos = robot_world_coords[:3]
+            robot_rotvec = np.array(robot_world_coords[3:6]) * robot_world_coords[6]
+            
+            # Create rotation matrix from rotation vector
+            rot = R.from_rotvec(robot_rotvec)
+            
+            # Transform: rotate inverse and translate
+            block_in_robot_frame = rot.inv().apply(block_pos - robot_pos)
+            self.target_block_pos = block_in_robot_frame
+            
+            print(f"Found block 3-{self.block_num} at world {block_pos}, robot frame {self.target_block_pos}")
+            self.phase = "approach_block"
 
-        # Reset the timeout if the time step has exceeded the timeout
-        if self.timeout is not None and tt >= self.timeout:
-            self.timeout = None
 
-        # State machine logic for different robot phases
-        if self.phase == "align_first_guy":
-            print("align_first_guy")
-            block_one_pose = np.array([-0.20, -2.00, 1.90, 3.37, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
+        if self.phase == "approach_block":
+            # Position around
+            approach_pos = self.target_block_pos.copy()
+            approach_pos[0] -= 0.27
+            approach_pos[2] -= 0.093
+            
+            # Create pose with downward orientation
+            approach_pose = np.concatenate([approach_pos, R.from_euler('xyz', [0, -80, 0], degrees=True).as_rotvec()])
+            q_target = getIK(approach_pose, cur_angles)
+            q_target[5] = 0.0
+            
+            result = self.move_to_joint_target(current_q, q_target, rate=0.12)
+            if np.all(np.abs(current_q[:6] - result) < 0.001):
+                self.phase = "grab_block"
+        
+            return np.append(result, False).tolist()
 
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all() and tt > 200:
-                self.phase = "go_to_next_block"
-            return np.append(result, 1).tolist()
+        elif self.phase == "grab_block":
+            if not self.grab_timer or tt >= self.grab_timer + 100:
+                self.grab_timer = tt + 50
+                return np.append(current_q, False).tolist()
+            elif tt > self.grab_timer + 40:
+                # Calculate offset from gripper to block in robot frame
+                T = getFK(current_q[:6])
+                gripper_pos_robot = T[:3, 3]
+                self.block_offset_robot_frame = self.target_block_pos - gripper_pos_robot
+                print(f"Calculated block offset: {self.block_offset_robot_frame}")
+                
+                # Disable physics to prevent collisions during manipulation
+                self.disable_block_physics(self.grabbed_block_node)
+                
+                self.phase = "retract"
+                return np.append(current_q, True).tolist()
+            elif tt > self.grab_timer:
+                return np.append(current_q, True).tolist()
+            else:
+                return np.append(current_q, False).tolist()
+       
+        elif self.phase == "retract":
+            # Update grabbed block position to follow gripper
+            self.update_grabbed_block_position(current_q)
+            
+            # Move back to approach position
+            retract_pos = self.target_block_pos.copy()
+            retract_pos[0] -= 0.4
+            retract_pos[2] -= 0.093
+            
+            retract_pose = np.concatenate([retract_pos, R.from_euler('xyz', [0, -80, 0], degrees=True).as_rotvec()])
+            q_target = getIK(retract_pose, cur_angles)
+            q_target[5] = 0.0
+            
+            result = self.move_to_joint_target(current_q, q_target, rate=0.08)
+            
+            if np.all(np.abs(current_q[:6] - result) < 0.001):
+                self.phase = "place_on_tower"
+            
+            return np.append(result, True).tolist()
 
-        if self.phase == "go_to_next_block":
-            print("go_to_next_block")
-            block_one_pose = np.array([-0.25, -1.95, 2.10, 3.37, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
+        elif self.phase == "place_on_tower":
+            # Phase 1: Move up vertically to approach position above tower
+            # Update grabbed block position
+            self.update_grabbed_block_position(current_q)
+            
+            # Move to position above original location (vertical approach)
+            place_pos = self.target_block_pos.copy()
+            place_pos[0] -= 0.4
+            place_pos[2] += 0
+            
+            place_pose = np.concatenate([place_pos, R.from_euler('xyz', [0, -80, 0], degrees=True).as_rotvec()])
+            q_target = getIK(place_pose, cur_angles)
+            q_target[5] = 0.0
+            
+            result = self.move_to_joint_target(current_q, q_target, rate=0.08)
+            
+            if np.all(np.abs(current_q[:6] - result) < 0.001):
+                self.phase = "place_insert"
+            
+            return np.append(result, True).tolist()
 
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_two"
-            return np.append(result, 0).tolist()
+        elif self.phase == "place_insert":
+            # Phase 2: Move horizontally to insert block onto tower
+            # Update grabbed block position
+            self.update_grabbed_block_position(current_q)
+            
+            # Move horizontally to placement position (same x/y as original, higher z)
+            insert_pos = self.target_block_pos.copy()
+            insert_pos[0] -= 0.28
+            insert_pos[2] += 0
+            
+            insert_pose = np.concatenate([insert_pos, R.from_euler('xyz', [0, -80, 0], degrees=True).as_rotvec()])
+            q_target = getIK(insert_pose, cur_angles)
+            q_target[5] = 0.0
+            
+            result = self.move_to_joint_target(current_q, q_target, rate=0.06)
+            
+            if np.all(np.abs(current_q[:6] - result) < 0.001):
+                self.phase = "place_release"
+                self.release_timer = tt
+            
+            return np.append(result, True).tolist()
 
-        if self.phase == "go_to_next_block_two":
-            print("go_to_next_block_two")
-            block_one_pose = np.array([-0.25, -1.60, 1.90, 1.00, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
+        elif self.phase == "place_release":
+            # Phase 3: Release the block
+            # Update grabbed block position while gripper is still closed
+            if tt < self.release_timer + 20:
+                self.update_grabbed_block_position(current_q)
+                return np.append(current_q, False).tolist()
+            
+            # Re-enable physics before releasing
+            self.enable_block_physics(self.grabbed_block_node)
+            
+            # Release the block
+            self.grabbed_block_node = None
+            self.block_offset_robot_frame = None
+            print(f"Released block 3-{self.block_num}")
+            
+            self.phase = "place_backup"
+            return np.append(current_q, False).tolist()
 
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_three"
-            return np.append(result, 0).tolist()
+        elif self.phase == "place_backup":
+            # Phase 4: Back up and close gripper
+            # Move back slightly
+            backup_pos = self.target_block_pos.copy()
+            backup_pos[0] -= 0.4
+            backup_pos[2] += 0
+            
+            backup_pose = np.concatenate([backup_pos, R.from_euler('xyz', [0, -80, 0], degrees=True).as_rotvec()])
+            q_target = getIK(backup_pose, cur_angles)
+            q_target[5] = 0.0
+            
+            result = self.move_to_joint_target(current_q, q_target, rate=0.08)
+            
+            if np.all(np.abs(current_q[:6] - result) < 0.001):
+                self.phase = "place_nudge"
+                self.nudge_timer = tt
+            
+            return np.append(result, True).tolist()
 
-        if self.phase == "go_to_next_block_three":
-            print("go_to_next_block_three")
-            block_one_pose = np.array([-0.25, -1.44, 1.75, 1.00, -1.37, 0.00])
-            result = self.move_to_joint_target(current_q, block_one_pose)
+        elif self.phase == "place_nudge":
+            # Phase 5: Push block into final position
+            # Move forward to nudge the block
+            nudge_pos = self.target_block_pos.copy()
+            nudge_pos[0] -= 0.25
+            nudge_pos[2] += 0
+            
+            nudge_pose = np.concatenate([nudge_pos, R.from_euler('xyz', [0, -80, 0], degrees=True).as_rotvec()])
+            q_target = getIK(nudge_pose, cur_angles)
+            q_target[5] = 0.0
+            
+            result = self.move_to_joint_target(current_q, q_target, rate=0.05)
+            
+            # Hold nudge position briefly
+            if np.all(np.abs(current_q[:6] - result) < 0.001) and tt > self.nudge_timer + 30:
+                # Move to next block
+                self.block_num += 2
+                if self.block_num > 3:
+                    self.phase = "done"
+                else:
+                    self.phase = "find_next_block"
+            
+            return np.append(result, True).tolist()
 
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_four"
-            return np.append(result, 1).tolist()
-
-        if self.phase == "go_to_next_block_four":
-            print("go_to_next_block_four")
-            block_one_pose = np.array([-0.20, -1.56, 1.83, 1.50, -1.34, 1.50])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_five"
-            return np.append(result, 0).tolist()
-
-        if self.phase == "go_to_next_block_five":
-            print("go_to_next_block_five")
-            block_one_pose = np.array([-0.20, -1.53, 1.83, 1.50, -1.34, 1.50])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all() and tt > 400:
-                self.phase = "go_to_next_block_six"
-            return np.append(result, 1).tolist()
-
-        if self.phase == "go_to_next_block_six":
-            print("go_to_next_block_six")
-            block_one_pose = np.array([-0.25, -2.10, 2.24, 1.00, -1.39, 1.50])
-            result = self.move_to_joint_target(current_q, block_one_pose)
-
-            q_diff = abs(current_q - result)
-            if (q_diff < 0.0001).all():
-                self.phase = "go_to_next_block_six"  # Stuck in the last phase, could be a placeholder for error handling
-            return np.append(result, 1).tolist()
-
-        # If no phase matches, return current joint angles and gripper state
-        gripper_state = (
-            self.target_q[6] if self.target_q is not None and len(self.target_q) >= 7 else False
-        )
-        return np.append(current_q[:6], gripper_state)
+        elif self.phase == "done":
+            return np.append(current_q[:6], False)

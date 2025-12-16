@@ -347,7 +347,7 @@ Pose {
       }
     }
     Solid {
-      translation -0.062000001174397204 2.9499718776553694 0.8648534079481778
+      translation -0.062000001174397204 2.9499718776553694 0.8658534079481778
       rotation 5.758396696458805e-05 -5.758866110728343e-05 0.9999999966838165 1.5708000146441425
       children [
         Shape {
@@ -365,12 +365,9 @@ Pose {
       boundingObject Box {
         size 0.05 0.17 0.05
       }
-      physics Physics {
-        mass 0.1
-      }
     }
     Solid {
-      translation -0.0620003 3.01197 0.864856
+      translation -0.0620003 3.01197 0.865856
       rotation 1.669698438426115e-05 -1.669946647420891e-05 0.9999999997211693 1.5708000094961998
       children [
         Shape {
@@ -388,12 +385,9 @@ Pose {
       boundingObject Box {
         size 0.05 0.17 0.05
       }
-      physics Physics {
-        mass 0.1
-      }
     }
     Solid {
-      translation -0.062 3.07397 0.864858
+      translation -0.062 3.07397 0.865858
       rotation 1.6698844126765572e-05 -1.669753223289025e-05 0.9999999997211705 1.5708000091868475
       children [
         Shape {
@@ -410,9 +404,6 @@ Pose {
       name "solid(43)"
       boundingObject Box {
         size 0.05 0.17 0.05
-      }
-      physics Physics {
-        mass 0.1
       }
     }
   ]

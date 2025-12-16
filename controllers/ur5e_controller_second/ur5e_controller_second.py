@@ -131,8 +131,6 @@ try:
 
         current_q = desired_command[:-1]
 
-        print("controller 2 tt: " + str(tt) + " current_q: " + str(current_q))
-
         for j, motor in enumerate(motors):
             motor.setPosition(desired_command[j])
 
