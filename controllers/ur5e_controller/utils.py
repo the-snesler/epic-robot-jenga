@@ -82,86 +82,6 @@ def transformMatrixToPose(T):
     w = R.from_matrix(Rm).as_rotvec()
     return np.concatenate([p, w])
 
-
-# def transformError(T_d, T_c):
-    # """Calculates the error between two homogeneous transformation matrices
-
-    # Args:
-        # T_d: desired 4x4 homogeneous transformation matrix
-        # T_c: current 4x4 homogeneous transformation matrix
-
-    # Returns:
-        # A six-element numpy array representing the position error (3) and orientation error (3, exponential coordinates)
-    # """
-    # split off rotation and translation parts
-    # R_d = T_d[:3, :3]
-    # p_d = T_d[:3, 3]
-    # R_c = T_c[:3, :3]
-    # p_c = T_c[:3, 3]
-
-    # translation error, easy peasy
-    # dp = p_d - p_c
-
-    # rotation error
-    # R_err = R_c.T @ R_d
-    # rotvec_err = R.from_matrix(R_err).as_rotvec()
-
-    # error = np.concatenate((dp, rotvec_err))
-    # return error
-
-
-# def jacobian(q):
-    # p_e = forwardKinematics(q)[:3, 3]  # end effector position
-    # T_cum = np.identity(4)  # current frame
-    # columns = []
-    # for i, t in enumerate([lambda q: np.identity(4), T01, T12, T23, T34, T45]):
-        # T_cum @= t(q[i - 1])  # transform to the next frame
-        # z_i = T_cum[:3, 2]  # rotation axis
-        # p_i = T_cum[:3, 3]  # position axis
-        # columns.append(np.concatenate((np.cross(z_i, (p_e - p_i)), z_i)))
-    # return np.column_stack(columns)
-
-
-# def inverseKinematics(desired_pose, current_q):
-    # """Implements an inverse kinematics controller using the Newton-Raphson method for a 6-DOF robot arm
-
-    # Args:
-        # tt: current simulation timestep (not used :D - a timestep is 0.016s = 62.5 Hz)
-        # desired_pose: a list of six for the desired position (3) and desired exponential coordinates (3)
-        # current_q: the list of six joint angles: initially the current six joint angles, and then the last commanded joint angles after that
-
-    # Returns:
-        # A six-element list of the joint angles in radians
-    # """
-    # q = current_q.copy()
-    # max_iters = 100
-    # epsilon = 1e-6
-    # T_d = np.concatenate(
-        # (
-            # np.concatenate(
-                # (
-                    # R.from_rotvec(desired_pose[3:]).as_matrix(),
-                    # np.atleast_2d(desired_pose[:3]).T,
-                # ),
-                # 1,
-            # ),
-            # np.atleast_2d([0, 0, 0, 1]),
-        # )
-    # )
-    # while True:
-        # T_a = forwardKinematics(q)
-        # error = transformError(T_d, T_a)
-        # if np.linalg.norm(error) < epsilon:
-            # break
-        # if max_iters <= 0:
-            # q= current_q.copy()
-            # break
-        # max_iters -= 1
-        # j = jacobian(q)
-        # j_dagger = np.linalg.inv(j)
-        # q += j_dagger @ error
-    # return q
-
 def close_enough(a, b, tol=0.02):
     return np.linalg.norm(np.array(a) - np.array(b)) < tol
 
@@ -228,7 +148,7 @@ def poseError(current_pose, desired_pose):
     Rrel = Rd @ Rc.T
     ori_err = R.from_matrix(Rrel).as_rotvec()
     return np.concatenate([pos_err, ori_err])
-def getIK(tt, desired_pose, current_q):
+def getIK(desired_pose, current_q):
     """
     Newton–Raphson IK with damped pseudo-inverse (via SVD pinv).
     desired_pose: [x,y,z, wx,wy,wz] (position + exponential coordinates).
@@ -236,9 +156,9 @@ def getIK(tt, desired_pose, current_q):
     """
     q = np.array(current_q, dtype=float)
     desiredPose = np.array(desired_pose, dtype=float)
-    maxIterations = 100 # Can be changed
-    tolerance = 1e-6 # Can be changed
-    alpha = 0.05 # Can be changed
+    maxIterations = 200 # Can be changed
+    tolerance = 1e-8 # Can be changed
+    alpha = 0.03 # Can be changed
    
     for _ in range(maxIterations):
         T06 = getFK(q)
@@ -261,3 +181,76 @@ def getIK(tt, desired_pose, current_q):
    
     return q.tolist()
     
+def get_block_position(root, layer, block_num):
+    """
+    Retrieve the world position of a block from Webots.
+
+    Args:
+        layer: Layer index (1–9)
+        block_num: Block index (1–3)
+
+    Returns:
+        np.array([x, y, z]) or None if not found
+    """
+
+    block_name = f"solid({layer}{block_num})"
+
+    try:
+        children_field = root.getField("children")
+
+        # Search entire scene tree recursively
+        for i in range(children_field.getCount()):
+            node = children_field.getMFNode(i)
+            if node is None:
+                continue
+
+            translation_field = _find_translation_by_name(node, block_name)
+            if translation_field is not None:
+                return translation_field
+
+        print(f"Warning: Block {block_name} not found")
+        return None
+
+    except Exception as e:
+        print(f"Error retrieving block {block_name}: {e}")
+        return None
+
+
+def _find_translation_by_name(node, target_name):
+    """
+    Recursively search for a node by its internal name.
+
+    Args:
+        node: Node to search
+        target_name: Name string to match
+
+    Returns:
+        Node or None
+    """
+    if node is None:
+        return None
+
+    # Check DEF name
+    def_name = node.getField("name")
+    if def_name is not None:
+        if def_name.getSFString() == target_name:
+            translation_field = node.getField("translation")
+            if translation_field:
+                return np.array(translation_field.getSFVec3f())
+
+    # Recursively search children
+    translation_field = node.getField("translation")
+    try:
+        children_field = node.getField("children")
+        if children_field:
+            for i in range(children_field.getCount()):
+                child = children_field.getMFNode(i)
+                result = _find_translation_by_name(child, target_name)
+                if result is not None and translation_field:
+                    return np.array(translation_field.getSFVec3f()) + result
+                elif result is not None:
+                    return result
+    except:
+        pass
+
+    return None
